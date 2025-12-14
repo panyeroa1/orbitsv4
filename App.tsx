@@ -1084,39 +1084,27 @@ const App: React.FC = () => {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
                                 {Array.isArray(aiToolOutput) && aiToolOutput.map((slide: any, i: number) => (
                                     <div key={i} className="aspect-video bg-white text-black p-6 rounded-xl shadow-2xl flex flex-col space-y-4 overflow-hidden relative">
-                         {/* YouTube-Style Live Captions Overlay */}
-          {showCaptions && (segments.length > 0 || interimTranscript) && (
-            <div className="absolute bottom-16 left-0 right-0 z-[90] pointer-events-none flex justify-center px-4">
-              <div className="max-w-4xl w-full">
-                {/* Scrolling Caption Container */}
-                <div className="bg-black/80 backdrop-blur-md rounded-xl p-4 shadow-2xl border border-white/10 max-h-24 overflow-hidden">
-                  <div className="space-y-2">
-                    {/* Show last 2 final segments */}
-                    {segments.slice(-2).map((seg, idx) => (
-                      <div 
-                        key={seg.id} 
-                        className={`text-white text-center font-medium text-base md:text-lg leading-relaxed drop-shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-300 ${idx === 0 ? 'opacity-60' : 'opacity-100'}`}
-                        style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8)' }}
-                      >
-                        <span className="text-neon text-sm font-bold mr-2">{seg.speakerName}:</span>
-                        {seg.translated || seg.original}
-                      </div>
-                    ))}
-                    
-                    {/* Interim (live typing) transcript */}
-                    {interimTranscript && (
-                      <div className="text-white/90 text-center font-medium text-base md:text-lg leading-relaxed drop-shadow-lg animate-pulse italic"
-                           style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8)' }}>
-                        <span className="text-neon-purple text-sm font-bold mr-2">You:</span>
-                        {interimTranscript}
-                        <span className="inline-block w-1 h-4 bg-neon ml-1 animate-pulse"></span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )} <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div className="absolute top-0 right-0 w-24 h-24 bg-neon/20 rounded-bl-full"></div>
+                                        <h3 className="text-2xl font-bold z-10">{slide.title}</h3>
+                                        <ul className="space-y-2 list-disc pl-5 flex-1 z-10">
+                                            {slide.bullets?.map((b: string, j: number) => <li key={j} className="text-sm">{b}</li>)}
+                                        </ul>
+                                        <div className="text-[10px] text-gray-500 text-right">ORBITS AI SLIDE {i+1}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Tool: BGM */}
+                {activeAITool === AITool.BGM && (
+                     <div className="max-w-3xl mx-auto space-y-8 text-center">
+                        <div className="space-y-2">
+                             <h2 className="text-4xl font-display font-black text-white">Smart Ambiance</h2>
+                             <p className="text-secondary">Select a vibe to enhance focus or energy.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                              {['lofi', 'upbeat', 'focus'].map(genre => (
                                  <button key={genre} onClick={() => toggleBGM(genre)} className={`group relative aspect-square rounded-3xl flex flex-col items-center justify-center space-y-4 border transition-all ${aiToolOutput === genre ? 'bg-neon text-black border-neon scale-105 shadow-[0_0_50px_rgba(0,243,255,0.3)]' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
                                      <div className={`p-4 rounded-full ${aiToolOutput === genre ? 'bg-black/10' : 'bg-white/10'}`}>
