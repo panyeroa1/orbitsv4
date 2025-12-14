@@ -800,8 +800,6 @@ const App: React.FC = () => {
   };
 
   const handleSTTResult = async (text: string, isFinal: boolean) => {
-    const segmentId = Date.now().toString();
-    
     if (!isFinal) {
         setInterimTranscript(text);
         setOrbitState('listening');
@@ -811,56 +809,98 @@ const App: React.FC = () => {
     setInterimTranscript('');
     setOrbitState('processing');
     
-    // Save to Supabase
-    if (sessionInfo) {
-        supabase.from('transcriptions').insert({
-            session_id: sessionInfo.id,
-            user_id: userId,
-            text: text,
-            timestamp: new Date().toISOString()
-        }).then(({ error }) => {
-        if (error) console.error("Supabase Save Error", error);
-        });
+    if (!sessionInfo || !userId) {
+      console.warn('[STT] No session or userId, skipping save');
+      setOrbitState('listening');
+      return;
     }
 
-    setSegments(prev => [...prev, { 
-        id: segmentId, 
-        original: text, 
-        translated: '', 
-        isFinal: true, 
-        timestamp: Date.now(),
-        speakerName: "You"
-    }]);
+    const speakerName = sessionInfo.isHost ? `${userEmail} (Host)` : userEmail;
 
     try {
-      // Use translation service with context
-      const result = await translationService.translate({
-        text,
-        sourceLang: config.sourceLang,
-        targetLang: config.targetLang,
-        context: translationContext
-      });
+      // 1. Insert transcript to caption_segments table
+      const { data: segment, error: segmentError } = await supabase
+        .from('caption_segments')
+        .insert({
+          meeting_id: sessionInfo.id,
+          speaker_peer_id: userId,
+          speaker_name: speakerName,
+          source_lang: config.sourceLang,
+          text_final: text,
+          stt_meta: { confidence: 0.9, timestamp: Date.now() }
+        })
+        .select()
+        .single();
 
-      if (result.translation) {
-        setSegments(prev => prev.map(s => s.id === segmentId ? { ...s, translated: result.translation } : s));
-        
-        // Update translation context
-        setTranslationContext(prev => {
-          const newContext = [...prev, text];
-          return newContext.slice(-maxContextSize); // Keep only last N segments
-        });
-
-        if (meetingSettings.hearOwnTranslation) {
-          await generateAndPlayAudio(result.translation);
-        } else {
-          setOrbitState('speaking');
-          setTimeout(() => setOrbitState('listening'), 2000);
-        }
+      if (segmentError) {
+        console.error('[STT] Error inserting transcript:', segmentError);
       }
-    } catch (e) {
-      console.error('Translation error:', e);
-      // Fallback: show original text if translation fails
-      setSegments(prev => prev.map(s => s.id === segmentId ? { ...s, translated: text } : s));
+
+      // 2. Update local UI immediately (optimistic)
+      const newSegment = {
+        id: segment?.id || Date.now().toString(),
+        speakerName,
+        original: text,
+        translated: '',
+        isFinal: true,
+        timestamp: Date.now()
+      };
+      setSegments(prev => [...prev, newSegment]);
+
+      // 3. Translate and save to caption_translations (if different language)
+      if (segment?.id && config.targetLang !== config.sourceLang) {
+        try {
+          const result = await translationService.translate({
+            text,
+            sourceLang: config.sourceLang,
+            targetLang: config.targetLang,
+            context: translationContext
+          });
+
+          if (result.translation) {
+            // Insert translation to DB (will trigger Realtime event for other participants)
+            const { error: translationError } = await supabase
+              .from('caption_translations')
+              .insert({
+                meeting_id: sessionInfo.id,
+                segment_id: segment.id,
+                target_lang: config.targetLang,
+                translated_text: result.translation,
+                quality_score: 0.85
+              });
+
+            if (translationError) {
+              console.error('[Translation] Error inserting:', translationError);
+            }
+
+            // Update local UI
+            setSegments(prev => prev.map(s => 
+              s.id === segment.id ? { ...s, translated: result.translation } : s
+            ));
+
+            // Update context
+            setTranslationContext(prev => {
+              const newContext = [...prev, text];
+              return newContext.slice(-maxContextSize);
+            });
+
+            // Play own translation if enabled
+            if (meetingSettings.hearOwnTranslation) {
+              await generateAndPlayAudio(result.translation);
+            } else {
+              setOrbitState('speaking');
+              setTimeout(() => setOrbitState('listening'), 2000);
+            }
+          }
+        } catch (e) {
+          console.error('[Translation] Error:', e);
+          setOrbitState('listening');
+        }
+      } else {
+        setOrbitState('listening');
+      }
+    } catch (error) {
+      console.error('[STT] Error in handleSTTResult:', error);
       setOrbitState('listening');
     }
   };
