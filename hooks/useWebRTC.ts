@@ -17,6 +17,7 @@ interface WebRTCHookProps {
   userName: string;
   localStream: MediaStream | null;
   isHost: boolean;
+  transmitRawAudio: boolean; // NEW: Control audio transmission
   onControlSignal?: (action: string, payload?: any) => void;
 }
 
@@ -26,7 +27,7 @@ export interface JoinRequest {
   timestamp: number;
 }
 
-export const useWebRTC = ({ sessionId, userId, userName, localStream, isHost, onControlSignal }: WebRTCHookProps) => {
+export const useWebRTC = ({ sessionId, userId, userName, localStream, isHost, transmitRawAudio, onControlSignal }: WebRTCHookProps) => {
   const [remoteParticipants, setRemoteParticipants] = useState<Participant[]>([]);
   const [streams, setStreams] = useState<Record<string, MediaStream>>({});
   const [notifications, setNotifications] = useState<string[]>([]);
@@ -140,6 +141,16 @@ export const useWebRTC = ({ sessionId, userId, userName, localStream, isHost, on
         Object.values(peersRef.current).forEach(pc => {
             const senders = pc.getSenders();
             localStream.getTracks().forEach(track => {
+                // Only transmit audio if transmitRawAudio is true
+                if (track.kind === 'audio' && !transmitRawAudio) {
+                    // Remove audio track if transmitRawAudio is false
+                    const sender = senders.find(s => s.track?.kind === 'audio');
+                    if (sender) {
+                        pc.removeTrack(sender);
+                    }
+                    return;
+                }
+                
                 const sender = senders.find(s => s.track?.kind === track.kind);
                 if (sender) {
                     sender.replaceTrack(track);
@@ -149,7 +160,7 @@ export const useWebRTC = ({ sessionId, userId, userName, localStream, isHost, on
             });
         });
     }
-  }, [localStream]);
+  }, [localStream, transmitRawAudio]);
 
   // Core WebRTC Logic
   const createPeerConnection = async (remotePeerId: string, initiator: boolean) => {
@@ -158,9 +169,15 @@ export const useWebRTC = ({ sessionId, userId, userName, localStream, isHost, on
     const pc = new RTCPeerConnection(RTC_CONFIG);
     peersRef.current[remotePeerId] = pc;
 
-    // Add local tracks
+    // Add local tracks (filter audio based on transmitRawAudio setting)
     if (localStream) {
-       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+       localStream.getTracks().forEach(track => {
+         // Only add audio track if transmitRawAudio is true
+         if (track.kind === 'audio' && !transmitRawAudio) {
+           return; // Skip audio track
+         }
+         pc.addTrack(track, localStream);
+       });
     }
 
     // Handle ICE Candidates

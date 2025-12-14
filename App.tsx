@@ -442,6 +442,7 @@ const App: React.FC = () => {
     userName: sessionInfo?.isHost ? `${userEmail} (Host)` : userEmail,
     localStream: mediaStreamRef.current,
     isHost: !!sessionInfo?.isHost,
+    transmitRawAudio: meetingSettings.transmitRawAudio, // NEW: Pass audio transmission setting
     onControlSignal: handleControlSignal
   });
 
