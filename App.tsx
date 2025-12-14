@@ -926,6 +926,70 @@ const App: React.FC = () => {
     } catch (e) { setOrbitState('listening'); }
   };
 
+  // --- Translation Subscription ---
+  useEffect(() => {
+    if (!sessionInfo?.id || !userId) return;
+
+    console.log('[Realtime] Subscribing to translations for meeting:', sessionInfo.id);
+
+    const translationChannel = supabase
+      .channel(`translations:${sessionInfo.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'caption_translations',
+          filter: `meeting_id=eq.${sessionInfo.id}`
+        },
+        async (payload) => {
+          const translation = payload.new as any; // Type assertion for Supabase payload
+          console.log('[Realtime] Received translation:', translation);
+
+          // Get the original segment to check speaker
+          const { data: segment } = await supabase
+            .from('caption_segments')
+            .select('speaker_peer_id, speaker_name')
+            .eq('id', translation.segment_id)
+            .single();
+
+          if (!segment) {
+            console.warn('[Realtime] Segment not found for translation');
+            return;
+          }
+
+          // Update UI with translation
+          setSegments(prev =>
+            prev.map(s =>
+              s.id === translation.segment_id
+                ? { ...s, translated: translation.translated_text }
+                : s
+            )
+          );
+
+          // Play TTS ONLY if:
+          // - Translation is for MY target language
+          // - Speaker is NOT me (or hearOwnTranslation is enabled)
+          const isMyLanguage = translation.target_lang === config.targetLang;
+          const isOtherSpeaker = segment.speaker_peer_id !== userId;
+          const shouldPlay = isMyLanguage && (isOtherSpeaker || meetingSettings.hearOwnTranslation);
+
+          if (shouldPlay) {
+            console.log('[Realtime] Playing TTS for translation from:', segment.speaker_name);
+            await generateAndPlayAudio(translation.translated_text);
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Translation subscription status:', status);
+      });
+
+    return () => {
+      console.log('[Realtime] Unsubscribing from translations');
+      translationChannel.unsubscribe();
+    };
+  }, [sessionInfo?.id, userId, config.targetLang, meetingSettings.hearOwnTranslation]);
+
   const toggleMic = () => {
     // Toggle WebRTC audio track (actual mute for call)
     if (!mediaStreamRef.current) return;
