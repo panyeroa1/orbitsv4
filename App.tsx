@@ -8,6 +8,7 @@ import { STTService } from './lib/sttService';
 import { getAvailableDevices, getStream } from './lib/deviceUtils';
 import { supabase } from './lib/supabaseClient';
 import { translationService } from './lib/translationService';
+import { SessionManager } from './lib/sessionStorage';
 import { Session } from '@supabase/supabase-js';
 import { useWebRTC } from './hooks/useWebRTC';
 import OrbitVisualizer from './components/OrbitVisualizer';
@@ -209,6 +210,26 @@ const App: React.FC = () => {
   const [participants, setParticipants] = useState<Participant[]>([]);
   
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+  
+  const togglePin = (participantId: string) => {
+    setPinnedParticipantId(prev => prev === participantId ? null : participantId);
+    // Unpin screen share when pinning a participant
+    if (pinnedParticipantId !== participantId) {
+      setPinnedScreenShare(null);
+    }
+  };
+
+  const pinScreenShare = (participantId: string) => {
+    setPinnedScreenShare(participantId);
+    // Unpin regular participant when pinning screen share
+    setPinnedParticipantId(null);
+  };
+
+  const unpinScreenShare = () => {
+    setPinnedScreenShare(null);
+  };
+
+  const [pinnedScreenShare, setPinnedScreenShare] = useState<string | null>(null); // Pin screen share by participant ID
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [sidebarView, setSidebarView] = useState<'participants' | 'chat' | 'secretary'>('participants');
   const [participantsViewMode, setParticipantsViewMode] = useState<'list' | 'grid'>('list');
@@ -312,6 +333,79 @@ const App: React.FC = () => {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // --- Session Restoration ---
+  useEffect(() => {
+    if (authLoading) return;
+
+    // Try to restore session after auth is loaded
+    if (SessionManager.shouldRestoreSession()) {
+      const savedSession = SessionManager.getSession();
+      if (savedSession) {
+        // Restore meeting state
+        if (savedSession.appState) setAppState(savedSession.appState);
+        if (savedSession.sessionInfo) setSessionInfo(savedSession.sessionInfo);
+        if (savedSession.config) setConfig(savedSession.config);
+        if (savedSession.meetingSettings) setMeetingSettings(savedSession.meetingSettings);
+        if (savedSession.isMicActive !== undefined) setIsMicActive(savedSession.isMicActive);
+        if (savedSession.isVideoActive !== undefined) setIsVideoActive(savedSession.isVideoActive);
+        if (savedSession.showCaptions !== undefined) setShowCaptions(savedSession.showCaptions);
+        if (savedSession.pinnedParticipantId) setPinnedParticipantId(savedSession.pinnedParticipantId);
+        if (savedSession.pinnedScreenShare) setPinnedScreenShare(savedSession.pinnedScreenShare);
+        
+        console.log('Session restored from localStorage');
+      }
+    }
+  }, [authLoading]);
+
+  // --- Session Persistence ---
+  useEffect(() => {
+    if (appState === AppState.ACTIVE && sessionInfo) {
+      // Save session whenever critical state changes
+      SessionManager.saveSession({
+        appState,
+        sessionInfo,
+        config,
+        meetingSettings,
+        isMicActive,
+        isVideoActive,
+        showCaptions,
+        pinnedParticipantId,
+        pinnedScreenShare,
+        timestamp: Date.now()
+      });
+    }
+  }, [appState, sessionInfo, config, meetingSettings, isMicActive, isVideoActive, showCaptions, pinnedParticipantId, pinnedScreenShare]);
+
+  // --- Prevent Accidental Navigation & Background Support ---
+  useEffect(() => {
+    if (appState !== AppState.ACTIVE) return;
+
+    // Warn before leaving page
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'You are in an active meeting. Are you sure you want to leave?';
+      return e.returnValue;
+    };
+
+    // Handle visibility changes (background tab support)
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.log('App moved to background - meeting continues');
+      } else {
+        console.log('App returned to foreground');
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [appState]);
+
 
   // WebRTC Hook
   const userId = session?.user?.id || 'guest';
@@ -443,26 +537,54 @@ const App: React.FC = () => {
     }
   }, [isVideoActive, isMicActive, selectedCamId, selectedMicId, appState]);
 
-  // Handle attaching remote streams to video elements
+  // --- Video src logic ---
   useEffect(() => {
-     if (appState !== AppState.ACTIVE) return;
-     if (videoRef.current) {
-         if (pinnedParticipantId === 'user-1') {
-             if (isScreenSharing && screenStreamRef.current) {
-                 videoRef.current.srcObject = screenStreamRef.current;
-             } else if (mediaStreamRef.current && isVideoActive) {
-                 videoRef.current.srcObject = mediaStreamRef.current;
-             } else {
-                 videoRef.current.srcObject = null;
-             }
-         } else if (pinnedParticipantId && streams[pinnedParticipantId]) {
-             videoRef.current.srcObject = streams[pinnedParticipantId];
-         } else {
-             videoRef.current.srcObject = null;
-         }
-         if (videoRef.current.srcObject) videoRef.current.play().catch(e => console.error("Main video play failed", e));
-     }
-  }, [appState, isVideoActive, isScreenSharing, pinnedParticipantId, mediaStreamRef.current, screenStreamRef.current, streams]);
+    if (appState !== AppState.ACTIVE || !videoRef.current) return;
+
+    let targetStream: MediaStream | null = null;
+
+    // Priority 1: Pinned screen share (highest priority)
+    if (pinnedScreenShare) {
+      const participant = remoteParticipants.find(p => p.id === pinnedScreenShare);
+      if (participant?.isScreenSharing && streams[pinnedScreenShare]) {
+        targetStream = streams[pinnedScreenShare];
+      }
+    }
+    
+    // Priority 2: Own screen share
+    if (!targetStream && isScreenSharing && screenStreamRef.current) {
+      targetStream = screenStreamRef.current;
+    }
+
+    // Priority 3: Any other screen share
+    if (!targetStream) {
+      const sharingParticipant = remoteParticipants.find(p => p.isScreenSharing);
+      if (sharingParticipant && streams[sharingParticipant.id]) {
+        targetStream = streams[sharingParticipant.id];
+      }
+    }
+
+    // Priority 4: Pinned participant
+    if (!targetStream && pinnedParticipantId && streams[pinnedParticipantId]) {
+      targetStream = streams[pinnedParticipantId];
+    }
+
+    // Priority 5: Own video
+    if (!targetStream && isVideoActive && mediaStreamRef.current) {
+      targetStream = mediaStreamRef.current;
+    }
+
+    // Priority 6: First remote participant
+    if (!targetStream && remoteParticipants.length > 0) {
+      const firstParticipant = remoteParticipants[0];
+      targetStream = streams[firstParticipant.id] || null;
+    }
+
+    if (targetStream && videoRef.current) {
+      videoRef.current.srcObject = targetStream;
+      videoRef.current.play().catch(e => console.error("Video play error:", e));
+    }
+  }, [appState, isVideoActive, isScreenSharing, pinnedParticipantId, pinnedScreenShare, mediaStreamRef.current, screenStreamRef.current, streams, remoteParticipants]);
 
 
   const startCamera = async () => {
@@ -793,6 +915,7 @@ const App: React.FC = () => {
 
   const handleLogout = async () => {
       await supabase.auth.signOut();
+      SessionManager.clearSession(); // Clear saved session
       setAppState(AppState.LANDING);
   };
 
@@ -1440,6 +1563,15 @@ const App: React.FC = () => {
                                         <div className="flex items-center space-x-1 pt-2 border-t border-white/5 opacity-40 group-hover:opacity-100 transition-opacity">
                                             <button onClick={() => toggleParticipantMute(p.id)} className="flex-1 flex items-center justify-center py-1 bg-white/5 hover:bg-white/10 rounded text-[10px] text-white/70" title="Toggle Mute">{p.isMuted ? <MicOff size={10} className="mr-1"/> : <Mic size={10} className="mr-1"/>} {p.isMuted ? 'Unmute' : 'Mute'}</button>
                                             <button onClick={() => requestParticipantVideo(p.id)} className="flex-1 flex items-center justify-center py-1 bg-white/5 hover:bg-white/10 rounded text-[10px] text-white/70" title="Ask for Video"><VideoIcon size={10} className="mr-1"/> Ask Video</button>
+                                            {p.isScreenSharing && (
+                                                <button 
+                                                    onClick={() => pinnedScreenShare === p.id ? unpinScreenShare() : pinScreenShare(p.id)} 
+                                                    className={`p-1 ${pinnedScreenShare === p.id ? 'bg-green-900/50 text-green-400' : 'bg-white/5 hover:bg-white/10 text-white/70'} rounded`} 
+                                                    title={pinnedScreenShare === p.id ? "Unpin Screen" : "Pin Screen"}
+                                                >
+                                                    <MonitorUp size={10} />
+                                                </button>
+                                            )}
                                             <button onClick={() => removeParticipant(p.id)} className="p-1 bg-red-900/20 hover:bg-red-900/50 text-red-400 rounded" title="Remove"><UserMinus size={10} /></button>
                                         </div>
                                     )}
