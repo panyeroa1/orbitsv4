@@ -138,7 +138,7 @@ export const useWebRTC = ({ sessionId, userId, userName, localStream, isHost, tr
   // 2. Handle Local Stream Changes
   useEffect(() => {
     if (localStream) {
-        Object.values(peersRef.current).forEach(pc => {
+        (Object.values(peersRef.current) as RTCPeerConnection[]).forEach(pc => {
             const senders = pc.getSenders();
             localStream.getTracks().forEach(track => {
                 // Only transmit audio if transmitRawAudio is true
