@@ -280,7 +280,8 @@ const App: React.FC = () => {
   const [selectedCamId, setSelectedCamId] = useState<string>('');
   
   // Active Controls
-  const [isMicActive, setIsMicActive] = useState(false);
+  const [isMicActive, setIsMicActive] = useState(false); // STT active state
+  const [isCallMicMuted, setIsCallMicMuted] = useState(false); // WebRTC audio track muted
   const [isVideoActive, setIsVideoActive] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [showCaptions, setShowCaptions] = useState(true);
@@ -593,11 +594,17 @@ const App: React.FC = () => {
   const startCamera = async () => {
     try {
       const requestVideo = isVideoActive; 
-      const requestAudio = isMicActive;
+      const requestAudio = !isCallMicMuted; // Use mute state instead of isMicActive
 
       if (!requestVideo && !requestAudio) {
           stopMediaStream();
           return;
+      }
+
+      // CRITICAL: Stop old tracks before acquiring new ones (prevents ghost tracks)
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
       }
 
       const stream = await getStream(
@@ -606,6 +613,12 @@ const App: React.FC = () => {
       );
       
       mediaStreamRef.current = stream;
+      
+      // Apply mute state to new audio track
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !isCallMicMuted;
+      }
       
       if (previewVideoRef.current && (appState === AppState.DEVICE_CHECK || appState === AppState.WAITING_ROOM)) {
           previewVideoRef.current.srcObject = stream;
@@ -874,15 +887,31 @@ const App: React.FC = () => {
   };
 
   const toggleMic = () => {
-    if (isMicActive) {
-      sttRef.current?.stop();
-      setIsMicActive(false);
-      setOrbitState('idle');
-    } else {
-      sttRef.current = new STTService(config.sourceLang);
-      sttRef.current?.start(handleSTTResult);
-      setIsMicActive(true);
-      setOrbitState('listening');
+    // Toggle WebRTC audio track (actual mute for call)
+    if (!mediaStreamRef.current) return;
+    
+    const audioTrack = mediaStreamRef.current.getAudioTracks()[0];
+    if (audioTrack) {
+      const newMutedState = !isCallMicMuted;
+      audioTrack.enabled = !newMutedState; // enabled = false means muted
+      setIsCallMicMuted(newMutedState);
+      
+      // Also control STT based on mute state
+      if (newMutedState) {
+        // Muting: stop STT
+        sttRef.current?.stop();
+        setIsMicActive(false);
+        setOrbitState('idle');
+      } else {
+        // Unmuting: start STT
+        // If STT service is not yet initialized, initialize it
+        if (!sttRef.current) {
+          sttRef.current = new STTService(config.sourceLang);
+        }
+        sttRef.current?.start(handleSTTResult);
+        setIsMicActive(true);
+        setOrbitState('listening');
+      }
     }
   };
 
