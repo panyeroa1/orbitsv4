@@ -9,6 +9,7 @@ import { getAvailableDevices, getStream } from './lib/deviceUtils';
 import { supabase } from './lib/supabaseClient';
 import { translationService } from './lib/translationService';
 import { SessionManager } from './lib/sessionStorage';
+import { PeerIdManager } from './lib/peerIdManager';
 import { Session } from '@supabase/supabase-js';
 import { useWebRTC } from './hooks/useWebRTC';
 import OrbitVisualizer from './components/OrbitVisualizer';
@@ -408,7 +409,8 @@ const App: React.FC = () => {
 
 
   // WebRTC Hook
-  const userId = session?.user?.id || 'guest';
+  // Use PeerIdManager for consistent peer IDs (fixes guest collision)
+  const userId = PeerIdManager.getPeerId(session?.user?.id);
   const userEmail = session?.user?.email || 'Guest';
   
   const handleControlSignal = (action: string, payload: any) => {
@@ -917,6 +919,7 @@ const App: React.FC = () => {
   const handleLogout = async () => {
       await supabase.auth.signOut();
       SessionManager.clearSession(); // Clear saved session
+      PeerIdManager.clearPeerId(); // Clear peer ID
       setAppState(AppState.LANDING);
   };
 
