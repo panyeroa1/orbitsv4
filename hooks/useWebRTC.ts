@@ -3,12 +3,41 @@ import { supabase } from '../lib/supabaseClient';
 import { Participant } from '../types';
 import { RealtimeChannel } from '@supabase/supabase-js';
 
-// WebRTC Configuration
+// WebRTC Configuration with STUN and TURN servers
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
+    // Public STUN servers (always available)
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' }
-  ]
+    { urls: 'stun:global.stun.twilio.com:3478' },
+    
+    // TURN servers (optional - configure via environment variables)
+    // Uncomment and add credentials when ready to deploy
+    // Option 1: Twilio TURN ($0.40/GB - https://www.twilio.com/stun-turn)
+    ...(import.meta.env.VITE_TURN_USERNAME && import.meta.env.VITE_TURN_PASSWORD ? [
+      {
+        urls: 'turn:global.turn.twilio.com:3478?transport=udp',
+        username: import.meta.env.VITE_TURN_USERNAME,
+        credential: import.meta.env.VITE_TURN_PASSWORD
+      },
+      {
+        urls: 'turn:global.turn.twilio.com:3478?transport=tcp',
+        username: import.meta.env.VITE_TURN_USERNAME,
+        credential: import.meta.env.VITE_TURN_PASSWORD
+      },
+      {
+        urls: 'turn:global.turn.twilio.com:443?transport=tcp',
+        username: import.meta.env.VITE_TURN_USERNAME,
+        credential: import.meta.env.VITE_TURN_PASSWORD
+      }
+    ] : []),
+    
+    // Option 2: Metered TURN ($0.20/GB - https://www.metered.ca/tools/openrelay/)
+    // Free tier: up to 50GB/month
+    { urls: 'turn:openrelay.metered.ca:80' },
+    { urls: 'turn:openrelay.metered.ca:443' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp' }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 interface WebRTCHookProps {
