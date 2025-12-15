@@ -1,4 +1,4 @@
-# Orbits v4 - Neural Translation Meeting Platform
+# Orbits Zoom like Meeting Platform with Translation realtime
 
 > **Real-time AI-powered video conferencing with instant translation, smart transcription, and intelligent meeting tools.**
 
